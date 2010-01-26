@@ -1,0 +1,136 @@
+<?php
+
+/**
+ * Implementation of hook_widget_info().
+ */
+function spatial_widget_widget_info() {
+  return array(
+    'spatial_widget' => array(
+      'label' => t('Shapefile Upload'),
+      'field types' => array('openlayers_wkt','geo'),
+      'multiple values' => CONTENT_HANDLE_MODULE,
+      'callbacks' => array(
+        'default value' => CONTENT_CALLBACK_DEFAULT,
+      ),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_widget().
+ */
+function spatial_widget_widget(&$form, &$form_state, $field, $items, $delta = 0) {
+	$form['#attributes']['enctype'] = "multipart/form-data";
+  
+  $field_name = $field['field_name'];
+  
+  if ($field['type'] == 'geo') {
+    // If we are using this widget for a geo field...
+    $info = module_invoke_all('gis_input_info');
+    $info = $info[$field['widget']['type']];
+    
+    foreach ($items as $key => $item) {
+      // Convert from the storage format (wkb) to the element's expected format (wkt).
+      if ($info['gis input']) {
+        $data = geo_wkb_get_data($item['wkb'], $info['gis input']);
+        $items[$key] = $data['value'];
+      }
+    }
+
+    $element['geo'] = array_merge($info['element'],
+      array(
+        '#default_value' => isset($items[$delta]) ? $items[$delta] : '',
+        '#gis_type' => $field['geo_type'],
+        '#gis_input' => $info['gis input'], // The format expected by the element.
+        '#gis_output' => 'wkt', // The format expected by geo_field's storage.
+        '#delta' => $delta,
+        '#title' => $field['widget']['label'],
+        '#required' => $field['required'],
+        '#description' => $field['widget']['description'],
+      )
+    );
+
+    if (!isset($element['geo']['#after_build'])) {
+      $element['geo']['#after_build'] = array();
+    }
+  }
+  
+  $element['value'] = array(
+	  '#type' => 'file', 
+	  '#title' => $field['widget']['label'], 
+	  '#element_validate' => array('spatial_widget_validate'),
+	  '#field' => $field,
+	  '#orig_values' => $form['#node']->$field_name,
+  );
+  
+  return $element;
+}
+
+function spatial_widget_validate(&$element, &$form_state) {
+	$file = file_save_upload($element['#field']['field_name']);
+	
+	if ($file) {
+		// If a file has been uploaded, change the values
+		
+		$shpdata = spatial_import_process_shapefile($file->filepath, 'wkt', 'wkt');
+		
+		$column_key = array_flip($shpdata['columns']);
+		$shpcolumn = $column_key['wkt'];
+    
+		$items = array();
+		$i = 0;
+		foreach($shpdata['data'] as $row) {
+			$items[$i] = array();
+			if ($element['#field']['type'] == 'geo') {
+				$items[$i]['geo'] = $row[$shpcolumn];
+			}
+			else {
+			  $items[$i]['openlayers_wkt'] = $row[$shpcolumn];
+		  }
+			$i++;
+		}
+		
+		// Check we don't exceed the allowed number of values.
+		if (count($items) > 1 && $element['#field']['multiple'] == 0) {
+      form_error($element, t('%name: this shapefile should only contain a single row.', array('%name' => t($element['#field']['widget']['label']))));
+		}
+		if ($element['#field']['multiple'] >= 2 && count($items) > $element['#field']['multiple']) {
+		  form_error($element, t('%name: this shapefile should not contain more than @count rows.', array('%name' => t($element['#field']['widget']['label']), '@count' => $element['#field']['multiple'])));
+		}
+		
+		$form_state['values'][$element['#field']['field_name']] = $items;
+  }
+  else {
+  	// No file has been uploaded, keep the original values.
+  	$form_state['values'][$element['#field']['field_name']] = $element['#orig_values'];
+  	
+  	// Geo is 'special'
+  	if ($element['#field']['type'] == 'geo') {
+	  	foreach ($element['#orig_values'] as &$geo_item) {
+	  		$data = geo_wkb_get_data($geo_item['geo'], 'wkt');
+	  		$geo_item['geo'] = $data['value'];
+	  	}
+	  	$form_state['values'][$element['#field']['field_name']] = $element['#orig_values'];
+    }
+  }
+}
+
+
+/**
+ * Implementation of hook_gis_input_info().
+ */
+function spatial_widget_gis_input_info($gis_type = NULL) {
+  $inputs = array(
+    'spatial_widget' => array(
+      'label' => t('Shapefile Upload'),
+      'gis input' => 'wkt',
+      'safe reverse' => TRUE,
+      'gis types' => array('point', 'linestring', 'polygon'),
+      'element' => array(
+        '#type' => 'spatial_widget',
+      ),
+    ),
+  );
+  return $inputs;
+}
+

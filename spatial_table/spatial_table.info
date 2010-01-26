@@ -1,0 +1,5 @@
+; $Id$
+name = Spatial Table
+description = Expose database tables with spatial information as layers in OpenLayers
+package = Database
+core = 6.x

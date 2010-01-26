@@ -1,0 +1,5 @@
+; $Id$
+name = Spatial Widget
+description = Provides a shapefile upload widget for geo and openlayers
+package = CCK
+core = 6.x
