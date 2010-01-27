@@ -154,7 +154,6 @@ function spatial_widget_validate(&$element, &$form_state) {
  * Implementation of hook_theme().
  */
 function spatial_widget_theme() {
-  dpm('theme test');
   $themes = array(
     'spatial_widget_combo' => array(
       'arguments' => array(
