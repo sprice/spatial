@@ -13,6 +13,14 @@ function spatial_widget_widget_info() {
         'default value' => CONTENT_CALLBACK_DEFAULT,
       ),
     ),
+    'spatial_widget_combo' => array(
+      'label' => t('Combo Map / Shapefile Upload'),
+      'field types' => array('openlayers_wkt','geo'),
+      'multiple values' => CONTENT_HANDLE_MODULE,
+      'callbacks' => array(
+        'default value' => CONTENT_CALLBACK_DEFAULT,
+      ),
+    ),
   );
 }
 
@@ -21,56 +29,73 @@ function spatial_widget_widget_info() {
  */
 function spatial_widget_widget(&$form, &$form_state, $field, $items, $delta = 0) {
 	$form['#attributes']['enctype'] = "multipart/form-data";
-  
   $field_name = $field['field_name'];
   
-  if ($field['type'] == 'geo') {
-    // If we are using this widget for a geo field...
-    $info = module_invoke_all('gis_input_info');
-    $info = $info[$field['widget']['type']];
-    
-    foreach ($items as $key => $item) {
-      // Convert from the storage format (wkb) to the element's expected format (wkt).
-      if ($info['gis input']) {
-        $data = geo_wkb_get_data($item['wkb'], $info['gis input']);
-        $items[$key] = $data['value'];
-      }
-    }
-
-    $element['geo'] = array_merge($info['element'],
-      array(
-        '#default_value' => isset($items[$delta]) ? $items[$delta] : '',
-        '#gis_type' => $field['geo_type'],
-        '#gis_input' => $info['gis input'], // The format expected by the element.
-        '#gis_output' => 'wkt', // The format expected by geo_field's storage.
-        '#delta' => $delta,
-        '#title' => $field['widget']['label'],
-        '#required' => $field['required'],
-        '#description' => $field['widget']['description'],
-      )
-    );
-
-    if (!isset($element['geo']['#after_build'])) {
-      $element['geo']['#after_build'] = array();
-    }
+  switch ($field['widget']['type']) {
+    case 'spatial_widget':
+      $element = array();
+      $element['shapefile_upload'] = array(
+    	  '#type' => 'file', 
+    	  '#title' => $field['widget']['label'], 
+    	  '#element_validate' => array('spatial_widget_validate'),
+    	  '#field' => $field,
+    	  '#orig_values' => $form['#node']->$field_name,
+      );
+      break;
+    case 'spatial_widget_combo':
+      $element = array();
+      $element['#type'] = 'spatial_widget_combo';
+      $element['#default_value'] = $items;
+      $element['#field'] = $field;
+      break;
   }
-  
-  $element['value'] = array(
-	  '#type' => 'file', 
-	  '#title' => $field['widget']['label'], 
-	  '#element_validate' => array('spatial_widget_validate'),
-	  '#field' => $field,
-	  '#orig_values' => $form['#node']->$field_name,
-  );
   
   return $element;
 }
 
+/**
+ * Implementation of FAPI hook_elements().
+ */
+function spatial_widget_elements() {
+  return array(
+    'spatial_widget_combo' => array(
+      '#input' => TRUE,
+      '#delta' => 0,
+      '#process' => array('spatial_widget_combo_element_process'),
+    ),
+  );
+}
+
+/**
+ * Process an individual element.
+ */
+function spatial_widget_combo_element_process($element, $edit, &$form_state, &$form) {
+  
+  // Load up openlayers_cck map element, which we will then modify to suite our needs.
+  $element = openlayers_cck_wkt_element_process($element, $edit, &$form_state, &$form);
+  
+  // Change element validation
+  $element['#element_validate'] = array('spatial_widget_validate');
+  
+  // Add shapefile upload items
+  $element['shapefile_upload_instructions'] = array(
+    '#value' => t('You may also upload a shapefile instead. Uploading a shapefile will override any shapes drawn on the map:'), 
+  );
+  $element['shapefile_upload'] = array(
+    '#type' => 'file',
+  );
+    
+  return $element;
+}
+
+
 function spatial_widget_validate(&$element, &$form_state) {
-	$file = file_save_upload($element['#field']['field_name']);
+  
+  $field = $element['#field'];
+	$file = file_save_upload($field['field_name']);
 	
 	if ($file) {
-		// If a file has been uploaded, change the values
+		// If a file has been uploaded, change the values  - this appies to both widget types
 		
 		$shpdata = spatial_import_process_shapefile($file->filepath, 'wkt', 'wkt');
 		
@@ -81,7 +106,7 @@ function spatial_widget_validate(&$element, &$form_state) {
 		$i = 0;
 		foreach($shpdata['data'] as $row) {
 			$items[$i] = array();
-			if ($element['#field']['type'] == 'geo') {
+			if ($field['type'] == 'geo') {
 				$items[$i]['geo'] = $row[$shpcolumn];
 			}
 			else {
@@ -91,46 +116,56 @@ function spatial_widget_validate(&$element, &$form_state) {
 		}
 		
 		// Check we don't exceed the allowed number of values.
-		if (count($items) > 1 && $element['#field']['multiple'] == 0) {
-      form_error($element, t('%name: this shapefile should only contain a single row.', array('%name' => t($element['#field']['widget']['label']))));
+		if (count($items) > 1 && $field['multiple'] == 0) {
+      form_error($element, t('%name: this shapefile should only contain a single row.', array('%name' => t($field['widget']['label']))));
 		}
-		if ($element['#field']['multiple'] >= 2 && count($items) > $element['#field']['multiple']) {
-		  form_error($element, t('%name: this shapefile should not contain more than @count rows.', array('%name' => t($element['#field']['widget']['label']), '@count' => $element['#field']['multiple'])));
+		if ($field['multiple'] >= 2 && count($items) > $field['multiple']) {
+		  form_error($element, t('%name: this shapefile should not contain more than @count rows.', array('%name' => t($field['widget']['label']), '@count' => $field['multiple'])));
 		}
 		
-		$form_state['values'][$element['#field']['field_name']] = $items;
+		$form_state['values'][$field['field_name']] = $items;
   }
   else {
-  	// No file has been uploaded, keep the original values.
-  	$form_state['values'][$element['#field']['field_name']] = $element['#orig_values'];
-  	
-  	// Geo is 'special'
-  	if ($element['#field']['type'] == 'geo') {
-	  	foreach ($element['#orig_values'] as &$geo_item) {
-	  		$data = geo_wkb_get_data($geo_item['geo'], 'wkt');
-	  		$geo_item['geo'] = $data['value'];
-	  	}
-	  	$form_state['values'][$element['#field']['field_name']] = $element['#orig_values'];
+   // No file has been uploaded - use either map wkt values, or stored values
+   // depending on widget
+   if ($field['widget']['type'] == 'spatial_widget_combo') {
+      openlayers_cck_validate($element, $form_state);
+    }
+    else {
+    	// We are using just a shapefile and no file has been uploaded, keep the original values
+    	// that we squirreled away in #orig_values
+    	$form_state['values'][$field['field_name']] = $element['#orig_values'];
+    	
+    	// Geo is 'special'
+    	if ($field['type'] == 'geo' && $element['#orig_values']) {
+  	  	foreach ($element['#orig_values'] as &$geo_item) {
+  	  		$data = geo_wkb_get_data($geo_item['geo'], 'wkt');
+  	  		$geo_item['geo'] = $data['value'];
+  	  	}
+  	  	$form_state['values'][$field['field_name']] = $element['#orig_values'];
+      }
     }
   }
 }
 
 
+
 /**
- * Implementation of hook_gis_input_info().
+ * Implementation of hook_theme().
  */
-function spatial_widget_gis_input_info($gis_type = NULL) {
-  $inputs = array(
-    'spatial_widget' => array(
-      'label' => t('Shapefile Upload'),
-      'gis input' => 'wkt',
-      'safe reverse' => TRUE,
-      'gis types' => array('point', 'linestring', 'polygon'),
-      'element' => array(
-        '#type' => 'spatial_widget',
+function spatial_widget_theme() {
+  dpm('theme test');
+  $themes = array(
+    'spatial_widget_combo' => array(
+      'arguments' => array(
+        'element' => NULL
       ),
     ),
   );
-  return $inputs;
+
+  return $themes;
 }
 
+function theme_spatial_widget_combo($element) {
+  return $element['#children'];
+}
