@@ -333,18 +333,21 @@ function _spatial_table_admin_table_options() {
     }
   }
   
-  // Orphaned Tables 
-  $orphaned_tables = array();
-  foreach ($db_schema as $name => $table) {
-    if (!isset($drupal_schema[$name])) {
-      $orphaned_tables[$name] = $name;
+  // Orphaned Tables
+  // We can only find orphaned tables with the schema module (for now). 
+  if ($db_schema) {
+    $orphaned_tables = array();
+    foreach ($db_schema as $name => $table) {
+      if (!isset($drupal_schema[$name])) {
+        $orphaned_tables[$name] = $name;
+      }
     }
-  }
-  if ($orphaned_tables) {
-  	$options['#or_tables'] = 'Orphaned Tables';
-	  foreach ($orphaned_tables as $table) {
-	  	$options[$table] = '- '.$table;
-	  }
+    if ($orphaned_tables) {
+    	$options['#or_tables'] = 'Orphaned Tables';
+  	  foreach ($orphaned_tables as $table) {
+  	  	$options[$table] = '- '.$table;
+  	  }
+    }
   }
   
   // All others
