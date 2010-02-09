@@ -8,17 +8,13 @@ class SpatialImportShapefileParser extends FeedsParser {
   /**
    * Parses a raw string and returns a Feed object from it.
    */
-  public function parse(FeedsFetcherResult $fetcherResult, FeedsSource $source) {
-    
-    if ($fetcherResult->type != 'text/filepath') {
-      throw new Exception(t('You must use Shapefile Parser with File Fetcher.'));
-    }
+  public function parse(FeedsImportBatch $batch, FeedsSource $source) {
     
     $options = $source->getConfigFor($this);
     
-    $filepath = ($fetcherResult->value);
+    $filepath = $batch->getFilePath();
     
-    $shapefile_data = spatial_import_process_shapefile($fetcherResult->value, $options['spatial_field_name'], 'wkt');
+    $shapefile_data = spatial_import_process_shapefile($filepath, $options['spatial_field_name'], 'wkt');
     
     // Apply titles in lower case.
     foreach ($shapefile_data['columns'] as $i => $title) {
@@ -34,7 +30,7 @@ class SpatialImportShapefileParser extends FeedsParser {
     }
     
     // Return result.
-    return new FeedsParserResult(array('items' => $result_rows));
+    $batch->setItems($result_rows);
   }
 
   /**
@@ -49,11 +45,7 @@ class SpatialImportShapefileParser extends FeedsParser {
    * Define defaults.
    */
   public function sourceDefaults() {
-    return array(
-      'spatial_field_name' => $this->config['spatial_field_name'],
-      'srid' => $this->config['srid'],
-      'storage' => $this->config['storage'],
-    );
+    return array();
   }
 
   /**
@@ -80,20 +72,38 @@ class SpatialImportShapefileParser extends FeedsParser {
     );
     $form['help']['#value'] = '<div class="help">'. theme('item_list', $items) .'</div>';
     
-    
+    return $form;
+  }
+
+  /**
+   * Define default configuration.
+   */
+  public function configDefaults() {
+    return array(
+      'spatial_field_name' => 'geom',
+      'srid' => '4326',
+      'storage' => 'wkt',
+    );
+  }
+
+  /**
+   * Build configuration form.
+   */
+  public function configForm(&$form_state) {
+    $form = array();
     $form['spatial_field_name'] = array(
       '#type' => 'textfield',
       '#title' => t('Spatial Data Column'),
-      '#default_value' => $source_config['spatial_field_name'],
+      '#default_value' => $this->config['spatial_field_name'],
       '#size' => 24,
       '#maxlength' => 24,
-      '#description' => t('The database column name that the spatial data should be stored in.')
+      '#description' => t('Shapefiles do not contain a geometry \'column\'. Please specify the a name for the column where the geometry will be stored. This column can then be referenced by \'Name of source field\' in field mappings.')
     );
     
     $form['srid'] = array(
       '#type' => 'textfield',
       '#title' => t('SRID (Spatial projection)'),
-      '#default_value' => $source_config['srid'],
+      '#default_value' => $this->config['srid'],
       '#size' => 24,
       '#maxlength' => 24,
       '#description' => t('Integer represeting the SRID of the uploaded shapefile. If you are unsure, use \'4326\' (lat/lon).')
@@ -105,21 +115,8 @@ class SpatialImportShapefileParser extends FeedsParser {
       '#value' => 'wkt',
       '#required' => TRUE,
     );
-    
     return $form;
   }
-
-  /**
-   * Define default configuration.
-   */
-  public function configDefaults() {
-    return array(
-      'spatial_field_name' => 'geom',
-      'srid' => '4326',
-      'storage' => 'geometry',
-    );
-  }
-
 }
 
 ?>
