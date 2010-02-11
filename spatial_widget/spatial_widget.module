@@ -4,24 +4,29 @@
  * Implementation of hook_widget_info().
  */
 function spatial_widget_widget_info() {
-  return array(
-    'spatial_widget' => array(
-      'label' => t('Shapefile Upload'),
-      'field types' => array('openlayers_wkt','geo'),
-      'multiple values' => CONTENT_HANDLE_MODULE,
-      'callbacks' => array(
-        'default value' => CONTENT_CALLBACK_DEFAULT,
-      ),
+  $widgets = array();
+  
+  $widgets['spatial_widget'] = array(
+    'label' => t('Shapefile Upload'),
+    'field types' => array('openlayers_wkt','geo'),
+    'multiple values' => CONTENT_HANDLE_MODULE,
+    'callbacks' => array(
+      'default value' => CONTENT_CALLBACK_DEFAULT,
     ),
-    'spatial_widget_combo' => array(
+  );
+  
+  if (module_exists('openlayers_cck')) {
+    $widgets['spatial_widget_combo'] = array(
       'label' => t('Combo Map / Shapefile Upload'),
       'field types' => array('openlayers_wkt','geo'),
       'multiple values' => CONTENT_HANDLE_MODULE,
       'callbacks' => array(
         'default value' => CONTENT_CALLBACK_DEFAULT,
-      ),
-    ),
-  );
+      )
+    );
+  }
+  
+  return $widgets;
 }
 
 /**
@@ -30,6 +35,15 @@ function spatial_widget_widget_info() {
 function spatial_widget_widget(&$form, &$form_state, $field, $items, $delta = 0) {
 	$form['#attributes']['enctype'] = "multipart/form-data";
   $field_name = $field['field_name'];
+  
+  // Fix geo because it's broken
+  if ($field['type'] == 'geo') {
+    foreach ($items as $key => $item) {
+      // Convert from the storage format (wkb) to the element's expected format (wkt).
+      $data = geo_wkb_get_data($item['wkb'], 'wkt');
+      $items[$key] = $data['value'];
+    }
+  }
   
   switch ($field['widget']['type']) {
     case 'spatial_widget':
@@ -51,6 +65,36 @@ function spatial_widget_widget(&$form, &$form_state, $field, $items, $delta = 0)
   }
   
   return $element;
+}
+
+
+/**
+ * Implementation of hook_widget_settings().
+ */
+function spatial_widget_widget_settings($op, $widget) {
+  if ($op == 'form') {
+    $form = array();
+    // If we are using a combo widget, include the openlayers_cck widget settings
+    if ($widget['type'] == 'spatial_widget_combo') {
+      $form = openlayers_cck_widget_settings($op, $widget);
+    }
+    // Save shapefiles to a directory
+    $form['spatial_widget_save_file'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Save shapefile to filesystem'),
+      '#description' => t('Save the shapefiles to the files directory permanently? If this is not checked, the shapefile will be discarded after upload'),
+      '#default_value' => isset($widget['spatial_widget_save_file']) ? $widget['spatial_widget_save_file'] : FALSE,
+    );
+    return $form;
+  }
+  if ($op == 'save') {
+    $save = array();
+    if ($widget['widget_type'] == 'spatial_widget_combo') {
+      $save = openlayers_cck_widget_settings($op, $widget);
+    }
+    $save[] = 'spatial_widget_save_file';
+    return $save;
+  }
 }
 
 /**
@@ -90,9 +134,15 @@ function spatial_widget_combo_element_process($element, $edit, &$form_state, &$f
 
 
 function spatial_widget_validate(&$element, &$form_state) {
-  
   $field = $element['#field'];
-	$file = file_save_upload($field['field_name']);
+  
+   if ($field['widget']['spatial_widget_save_file']) {
+	   $file = file_save_upload($field['field_name'], array(), file_directory_path());
+	   //@@TODO: Attach this to the field somehow. Allow a different, private, directory.
+	 }
+	 else {
+	   $file = file_save_upload($field['field_name']);
+	}
 	
 	if ($file) {
 		// If a file has been uploaded, change the values  - this appies to both widget types
