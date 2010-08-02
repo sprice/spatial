@@ -1,4 +1,5 @@
 <?php
+// $Id$
 
 /**
  * Parses a given file as a zipped shapefile.
@@ -10,10 +11,10 @@ class SpatialImportShapefileParser extends FeedsParser {
    */
   public function parse(FeedsImportBatch $batch, FeedsSource $source) {
     
-    $options = $source->getConfigFor($this);
+    $options = $this->config;
     
     $filepath = $batch->getFilePath();
-    
+
     $shapefile_data = spatial_import_process_shapefile($filepath, $options['spatial_field_name'], 'wkt');
     
     // Apply titles in lower case.
@@ -106,10 +107,10 @@ class SpatialImportShapefileParser extends FeedsParser {
       '#default_value' => $this->config['srid'],
       '#size' => 24,
       '#maxlength' => 24,
-      '#description' => t('Integer represeting the SRID of the uploaded shapefile. If you are unsure, use \'4326\' (lat/lon).')
+      '#description' => t('Integer representing the SRID of the uploaded shapefile. If you are unsure, use \'4326\' (lat/lon).')
     );
     
-    $form['storage'] = array (
+    $form['storage'] = array(
       '#type' => 'hidden',
       '#title' => t('Database Storage'),
       '#value' => 'wkt',
