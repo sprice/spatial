@@ -14,13 +14,61 @@ require_once(drupal_get_path('module','spatial_import').'/spatial_import.tw.inc'
  * zipped shapefile.
  */
 function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $field_type = 'wkt') {
-    if (!is_readable($filepath) || (!is_resource($zip = zip_open($filepath)))) {
+    $now = time();
+    $checkpath = realpath(file_directory_temp()).'/spatial_import/'.$now;
+    file_check_directory($checkpath,1);
+    file_copy($filepath, $checkpath, FILE_EXISTS_REPLACE);
+    
+    $zip = new ZipArchive;
+    if (!is_readable($filepath) || ($zip->open($filepath) !== TRUE)) {
       drupal_set_message(t('zip file nonexistant or unreadable.'), 'error');
       return;
     }
-  
+    
+    $zip->extractTo($checkpath);
+    $zip->close();
+    
+    $raw_shapefiles = file_scan_directory($checkpath,'\.shp$|\.dbf$|\.shx$|\.prj$');
+    $shapefiles = array();
+    
+    foreach ($raw_shapefiles as $shp) {
+      $extension = substr($shp->filename, -3);
+      $shapefiles[$shp->name][$extension] = $shp->basename;
+    }
+    
+    // Try to use ogr2ogr to reproject them on the fly to EPSG:4326, and convert to GML
+    if (exec('which ogr2ogr')) {
+      $i = 0;
+      foreach ($shapefiles as $basename => $shapefile) {
+        exec('ogr2ogr -t_srs EPSG:4326 '.escapeshellarg($checkpath.'/'.'spatial_import_projected_'.$i.'.shp').' '.escapeshellarg($checkpath.'/'.$shapefile['shp']), $exec_out, $exec_non_sucess);
+        $i++;
+      }
+      $raw_shapefiles = file_scan_directory($checkpath,'spatial_import_projected_[0-9]\.shp$|spatial_import_projected_[0-9]\.dbf$|spatial_import_projected_[0-9]\.shx$|spatial_import_projected_[0-9]\.prj$');
+      $shapefiles = array();
+      
+      foreach ($raw_shapefiles as $shp) {
+        $extension = substr($shp->filename, -3);
+        $shapefiles[$shp->name][$extension] = $shp->basename;
+      }
+    }
+    
+    // We will kludge it big here, and re-zip it so we don't need to re-code what's below. I know this is lame, patches welcome! :-/
+    // @@TODO: Don't use this re-zip kludge, actually process the files directly
+    
+    $zip = new ZipArchive;
+    $zip->open($checkpath.'/spatial_import.zip',ZIPARCHIVE::CREATE);
+    foreach($shapefiles as $shapefile) {
+      foreach ($shapefile as $shapepart) {
+        $zip->addFile($checkpath.'/'.$shapepart);
+      }
+    }
+    $zip->close();
+    
+    $zip = zip_open($checkpath.'/spatial_import.zip');
+    
     // Catalog the contents of the zip file.
     $files = array();
+    
     while ($res = zip_read($zip)) {
       $ext = strtolower(substr(strrchr(zip_entry_name($res), '.'), 1));
       $files[$ext] = $res;
@@ -30,15 +78,6 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     if (!isset($files['shp']) || !isset($files['dbf']) || !isset($files['shx'])) {
       drupal_set_message(t('This does not appear to be an archive that contains valid shp data.'), 'error');
       return;
-    }
-  
-    // See if we can get the projection information from the prj file.
-    if (isset($files['prj'])) {
-      // TODO Parse srid from prj file, for conversion if necessary.
-    }
-  
-    if (isset($files['dbt'])) {
-      drupal_set_message(t('This database contains longtext/memo fields, which are unsupported.  Proceeding to enter other data anyway.'), 'warning');
     }
   
     // Get headers and table definition from the dbf file.
