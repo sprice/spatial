@@ -1,4 +1,3 @@
-; $Id$
 name = Spatial Import
 description = Import spatial data with Table Wizard or Feeds
 package = Database

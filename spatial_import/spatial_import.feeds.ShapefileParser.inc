@@ -1,5 +1,4 @@
 <?php
-// $Id$
 
 /**
  * Parses a given file as a zipped shapefile.

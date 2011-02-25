@@ -1,5 +1,4 @@
 <?php
-// $Id$
 
 // Include Feed hooks and functionality
 require_once(drupal_get_path('module','spatial_import').'/spatial_import.feeds.inc');
