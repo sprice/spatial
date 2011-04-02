@@ -10,144 +10,149 @@ require_once(drupal_get_path('module', 'spatial_import') . '/spatial_import.feed
  * zipped shapefile.
  */
 function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $field_type = 'wkt') {
-    $destination = file_stream_wrapper_get_instance_by_uri('temporary://' . '/spatial_import/' . time());
-    file_prepare_directory($destination->getUri(), 1);
-    file_copy($shapefile, $destination->getUri(), FILE_EXISTS_REPLACE);
-    $dest_path = drupal_realpath($destination->getUri());
-    $source_path = drupal_realpath($shapefile->uri);
+  $destination = file_stream_wrapper_get_instance_by_uri('temporary://' . '/spatial_import/' . time());
+  file_prepare_directory($destination->getUri(), 1);
+  file_copy($shapefile, $destination->getUri(), FILE_EXISTS_REPLACE);
+  $dest_path = drupal_realpath($destination->getUri());
+  $source_path = drupal_realpath($shapefile->uri);
+  if (strncmp($dest_path, '/private', 8)) {
     
-    $zip = new ZipArchive;
-    if (!is_readable($source_path) || ($zip->open($source_path) !== TRUE)) {
-      drupal_set_message(t('zip file nonexistant or unreadable.'), 'error');
-      return;
+  }
+  $zip = new ZipArchive;
+  if (!is_readable($source_path) || ($zip->open($source_path) !== TRUE)) {
+    drupal_set_message(t('zip file nonexistant or unreadable.'), 'error');
+    return;
+  }
+  
+  $zip->extractTo($dest_path);
+  $zip->close();
+  
+  $stuff = file_scan_directory($dest_path);
+  error_log(print_r($dest_path,1),0);
+  
+  $raw_shapefiles = file_scan_directory($dest_path, '\.shp$|\.dbf$|\.shx$|\.prj$');
+  $shapefiles = array();
+  
+  foreach ($raw_shapefiles as $shp) {
+    $extension = substr($shp->filename, -3);
+    $shapefiles[$shp->name][$extension] = $shp->basename;
+  }
+  
+  // Try to use ogr2ogr to reproject them on the fly to EPSG:4326, and convert to GML
+  if (exec('which ogr2ogr')) {
+    $i = 0;
+    foreach ($shapefiles as $basename => $shapefile) {
+      exec('ogr2ogr -t_srs EPSG:4326 ' . escapeshellarg($dest_path . '/' . 'spatial_import_projected_' . $i . '.shp') . ' ' . escapeshellarg($dest_path . '/' . $shapefile['shp']), $exec_out, $exec_non_sucess);
+      $i++;
     }
-    
-    $zip->extractTo($dest_path);
-    $zip->close();
-    
-    $raw_shapefiles = file_scan_directory($dest_path, '\.shp$|\.dbf$|\.shx$|\.prj$');
+    $raw_shapefiles = file_scan_directory($dest_path, 'spatial_import_projected_[0-9]\.shp$|spatial_import_projected_[0-9]\.dbf$|spatial_import_projected_[0-9]\.shx$|spatial_import_projected_[0-9]\.prj$');
     $shapefiles = array();
     
     foreach ($raw_shapefiles as $shp) {
       $extension = substr($shp->filename, -3);
       $shapefiles[$shp->name][$extension] = $shp->basename;
     }
-    
-    // Try to use ogr2ogr to reproject them on the fly to EPSG:4326, and convert to GML
-    if (exec('which ogr2ogr')) {
-      $i = 0;
-      foreach ($shapefiles as $basename => $shapefile) {
-        exec('ogr2ogr -t_srs EPSG:4326 ' . escapeshellarg($dest_path . '/' . 'spatial_import_projected_' . $i . '.shp') . ' ' . escapeshellarg($dest_path . '/' . $shapefile['shp']), $exec_out, $exec_non_sucess);
-        $i++;
-      }
-      $raw_shapefiles = file_scan_directory($dest_path, 'spatial_import_projected_[0-9]\.shp$|spatial_import_projected_[0-9]\.dbf$|spatial_import_projected_[0-9]\.shx$|spatial_import_projected_[0-9]\.prj$');
-      $shapefiles = array();
-      
-      foreach ($raw_shapefiles as $shp) {
-        $extension = substr($shp->filename, -3);
-        $shapefiles[$shp->name][$extension] = $shp->basename;
-      }
+  }
+  
+  // We will kludge it big here, and re-zip it so we don't need to re-code what's below. I know this is lame, patches welcome! :-/
+  // @@TODO: Don't use this re-zip kludge, actually process the files directly
+  
+  $zip = new ZipArchive;
+  $zip->open($dest_path . '/spatial_import.zip', ZIPARCHIVE::CREATE);
+  foreach ($shapefiles as $shapefile) {
+    foreach ($shapefile as $shapepart) {
+      $zip->addFile($dest_path . '/' . $shapepart);
     }
-    
-    // We will kludge it big here, and re-zip it so we don't need to re-code what's below. I know this is lame, patches welcome! :-/
-    // @@TODO: Don't use this re-zip kludge, actually process the files directly
-    
-    $zip = new ZipArchive;
-    $zip->open($dest_path . '/spatial_import.zip', ZIPARCHIVE::CREATE);
-    foreach ($shapefiles as $shapefile) {
-      foreach ($shapefile as $shapepart) {
-        $zip->addFile($dest_path . '/' . $shapepart);
-      }
-    }
-    $zip->close();
-    
-    $zip = zip_open($dest_path . '/spatial_import.zip');
-    
-    // Catalog the contents of the zip file.
-    $files = array();
-    
-    while ($res = zip_read($zip)) {
-      $ext = strtolower(substr(strrchr(zip_entry_name($res), '.'), 1));
-      $files[$ext] = $res;
+  }
+  $zip->close();
+  
+  $zip = zip_open($dest_path . '/spatial_import.zip');
+  
+  // Catalog the contents of the zip file.
+  $files = array();
+  
+  while ($res = zip_read($zip)) {
+    $ext = strtolower(substr(strrchr(zip_entry_name($res), '.'), 1));
+    $files[$ext] = $res;
+  }
+
+  // The zip file must minimally contain a shp, dbf and shx file.
+  if (!isset($files['shp']) || !isset($files['dbf']) || !isset($files['shx'])) {
+    drupal_set_message(t('This does not appear to be an archive that contains valid shp data.'), 'error');
+    return;
+  }
+
+  // Get headers and table definition from the dbf file.
+  $schema = array('description' => t('Imported shapefile'), 'fields' => array());
+  $headers = _spatial_import_dbf_headers($files['dbf'], $schema);
+
+  // Shape file headers are stored in the first 100 bytes of the shp/shx files.
+  $headers += _spatial_import_shp_headers(zip_entry_read($files['shp'], 100));
+  
+  // Apply 'direct to database' filters.
+  // These are only used by TW Import
+  $headers['field_filters'][$spatial_field] = '_spatial_import_shp_data_' . $field_type;
+  
+  // Get column names
+  $columns = array_keys($headers['field_lengths']);
+
+   // Add 'spatial_field' to the list of columns
+  $columns[] = $spatial_field;
+  
+  // Add spatial_field to schema
+  if ($field_type == 'geometry') {
+    $schema['fields'][$spatial_field] = array(
+      'type' => 'geometry',
+      'mysql_type' => 'geometry',
+      'pgsql_type' => 'GEOMETRY',
+      'not null' => TRUE,
+    );
+  }
+  
+  if ($field_type == 'wkt') {
+    $schema['fields'][$spatial_field] = array(
+      'type' => 'text',
+      'size' => 'big',
+    );
+  }
+  
+  $data = array();
+  
+  $row_count = 0;
+  while ($shp = _spatial_import_shp_get_record($files['shp'])) {
+    $values = array();
+    $dbf_data = zip_entry_read($files['dbf'], $headers['record_size']);
+    $dbf_data = substr($dbf_data, 1); // Remove "record deleted" flag.
+    foreach ($headers['field_lengths'] as $name => $length) {
+      $value = substr($dbf_data, 0, $length);
+      $dbf_data = substr($dbf_data, $length);
+
+      // Use a predefined function to filter and process each value.
+      $process = $headers['field_filters'][$name];
+      $values[] = $value;
     }
 
-    // The zip file must minimally contain a shp, dbf and shx file.
-    if (!isset($files['shp']) || !isset($files['dbf']) || !isset($files['shx'])) {
-      drupal_set_message(t('This does not appear to be an archive that contains valid shp data.'), 'error');
-      return;
+    // Add the geometry text.
+    if (is_array($shp['data'])) {
+      $values[] = $shp['data']['wkt'];
     }
-  
-    // Get headers and table definition from the dbf file.
-    $schema = array('description' => t('Imported shapefile'), 'fields' => array());
-    $headers = _spatial_import_dbf_headers($files['dbf'], $schema);
-  
-    // Shape file headers are stored in the first 100 bytes of the shp/shx files.
-    $headers += _spatial_import_shp_headers(zip_entry_read($files['shp'], 100));
-    
-    // Apply 'direct to database' filters.
-    // These are only used by TW Import
-    $headers['field_filters'][$spatial_field] = '_spatial_import_shp_data_' . $field_type;
-    
-    // Get column names
-    $columns = array_keys($headers['field_lengths']);
-
-     // Add 'spatial_field' to the list of columns
-    $columns[] = $spatial_field;
-    
-    // Add spatial_field to schema
-    if ($field_type == 'geometry') {
-      $schema['fields'][$spatial_field] = array(
-        'type' => 'geometry',
-        'mysql_type' => 'geometry',
-        'pgsql_type' => 'GEOMETRY',
-        'not null' => TRUE,
-      );
+    else {
+      $values[] = $shp['data'];
     }
+    $data[] = $values;
     
-    if ($field_type == 'wkt') {
-      $schema['fields'][$spatial_field] = array(
-        'type' => 'text',
-        'size' => 'big',
-      );
-    }
-    
-    $data = array();
-    
-    $row_count = 0;
-    while ($shp = _spatial_import_shp_get_record($files['shp'])) {
-      $values = array();
-      $dbf_data = zip_entry_read($files['dbf'], $headers['record_size']);
-      $dbf_data = substr($dbf_data, 1); // Remove "record deleted" flag.
-      foreach ($headers['field_lengths'] as $name => $length) {
-        $value = substr($dbf_data, 0, $length);
-        $dbf_data = substr($dbf_data, $length);
+    $row_count++;
+  }
   
-        // Use a predefined function to filter and process each value.
-        $process = $headers['field_filters'][$name];
-        $values[] = $value;
-      }
-  
-      // Add the geometry text.
-      if (is_array($shp['data'])) {
-        $values[] = $shp['data']['wkt'];
-      }
-      else {
-        $values[] = $shp['data'];
-      }
-      $data[] = $values;
-      
-      $row_count++;
-    }
-    
-    return array(
-      'schema' => $schema,
-      'headers' => $headers,
-      'columns' => $columns, 
-      'shapecolumn' => $spatial_field,
-      'shapetype' => $field_type,
-      'data' => $data,
-      'srid' => NULL, //@@TODO
-    ); 
+  return array(
+    'schema' => $schema,
+    'headers' => $headers,
+    'columns' => $columns, 
+    'shapecolumn' => $spatial_field,
+    'shapetype' => $field_type,
+    'data' => $data,
+    'srid' => NULL, //@@TODO
+  ); 
 }
 
 
