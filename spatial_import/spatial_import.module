@@ -10,34 +10,27 @@ require_once(drupal_get_path('module', 'spatial_import') . '/spatial_import.feed
  * zipped shapefile.
  */
 function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $field_type = 'wkt') {
-  $destination = file_stream_wrapper_get_instance_by_uri('temporary://' . '/spatial_import/' . time());
+  $destination = file_stream_wrapper_get_instance_by_uri('temporary://' . 'spatial_import/' . time());
   file_prepare_directory($destination->getUri(), 1);
   file_copy($shapefile, $destination->getUri(), FILE_EXISTS_REPLACE);
   $dest_path = drupal_realpath($destination->getUri());
   $source_path = drupal_realpath($shapefile->uri);
-  if (strncmp($dest_path, '/private', 8)) {
-    
-  }
+
+  //@TODO Only do this if temp dir begins with /private as it does in OSX
+  $dest_path = substr_replace($dest_path, '', 0, 8);
   $zip = new ZipArchive;
   if (!is_readable($source_path) || ($zip->open($source_path) !== TRUE)) {
     drupal_set_message(t('zip file nonexistant or unreadable.'), 'error');
     return;
   }
-  
   $zip->extractTo($dest_path);
   $zip->close();
-  
-  $stuff = file_scan_directory($dest_path);
-  error_log(print_r($dest_path,1),0);
-  
-  $raw_shapefiles = file_scan_directory($dest_path, '\.shp$|\.dbf$|\.shx$|\.prj$');
+  $raw_shapefiles = file_scan_directory($destination->getUri(), '/^.*\.(shp|dbf|shx|prj)$/');
   $shapefiles = array();
-  
   foreach ($raw_shapefiles as $shp) {
     $extension = substr($shp->filename, -3);
-    $shapefiles[$shp->name][$extension] = $shp->basename;
+    $shapefiles[$shp->name][$extension] = drupal_realpath($shp->uri);
   }
-  
   // Try to use ogr2ogr to reproject them on the fly to EPSG:4326, and convert to GML
   if (exec('which ogr2ogr')) {
     $i = 0;
@@ -50,55 +43,48 @@ function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $
     
     foreach ($raw_shapefiles as $shp) {
       $extension = substr($shp->filename, -3);
-      $shapefiles[$shp->name][$extension] = $shp->basename;
+      $shapefiles[$shp->name][$extension] = drupal_realpath($shp->uri);
     }
   }
-  
   // We will kludge it big here, and re-zip it so we don't need to re-code what's below. I know this is lame, patches welcome! :-/
   // @@TODO: Don't use this re-zip kludge, actually process the files directly
-  
   $zip = new ZipArchive;
   $zip->open($dest_path . '/spatial_import.zip', ZIPARCHIVE::CREATE);
   foreach ($shapefiles as $shapefile) {
     foreach ($shapefile as $shapepart) {
-      $zip->addFile($dest_path . '/' . $shapepart);
+      $zip->addFile($shapepart);
     }
   }
   $zip->close();
-  
   $zip = zip_open($dest_path . '/spatial_import.zip');
-  
   // Catalog the contents of the zip file.
   $files = array();
-  
   while ($res = zip_read($zip)) {
     $ext = strtolower(substr(strrchr(zip_entry_name($res), '.'), 1));
     $files[$ext] = $res;
   }
-
   // The zip file must minimally contain a shp, dbf and shx file.
   if (!isset($files['shp']) || !isset($files['dbf']) || !isset($files['shx'])) {
     drupal_set_message(t('This does not appear to be an archive that contains valid shp data.'), 'error');
     return;
   }
-
   // Get headers and table definition from the dbf file.
   $schema = array('description' => t('Imported shapefile'), 'fields' => array());
   $headers = _spatial_import_dbf_headers($files['dbf'], $schema);
 
   // Shape file headers are stored in the first 100 bytes of the shp/shx files.
   $headers += _spatial_import_shp_headers(zip_entry_read($files['shp'], 100));
-  
+
   // Apply 'direct to database' filters.
   // These are only used by TW Import
   $headers['field_filters'][$spatial_field] = '_spatial_import_shp_data_' . $field_type;
-  
+
   // Get column names
   $columns = array_keys($headers['field_lengths']);
 
    // Add 'spatial_field' to the list of columns
   $columns[] = $spatial_field;
-  
+
   // Add spatial_field to schema
   if ($field_type == 'geometry') {
     $schema['fields'][$spatial_field] = array(
@@ -108,16 +94,16 @@ function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $
       'not null' => TRUE,
     );
   }
-  
+
   if ($field_type == 'wkt') {
     $schema['fields'][$spatial_field] = array(
       'type' => 'text',
       'size' => 'big',
     );
   }
-  
+
   $data = array();
-  
+
   $row_count = 0;
   while ($shp = _spatial_import_shp_get_record($files['shp'])) {
     $values = array();
@@ -140,10 +126,8 @@ function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $
       $values[] = $shp['data'];
     }
     $data[] = $values;
-    
     $row_count++;
   }
-  
   return array(
     'schema' => $schema,
     'headers' => $headers,
@@ -154,7 +138,6 @@ function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $
     'srid' => NULL, //@@TODO
   ); 
 }
-
 
 /**
  * Generate the Drupal-relative path for storing imported files (creating the spatial_imports
