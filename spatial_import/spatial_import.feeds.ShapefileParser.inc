@@ -19,8 +19,8 @@ class SpatialImportShapefileParser extends FeedsParser {
     $source_config = $source->getConfigFor($this);
     $state = $source->state(FEEDS_PARSE);
     $result = new FeedsParserResult();
-    //error_log(print_r($source,1),0);
-    $shapefile = file_load('4');
+    // @TODO don't hardcode this!
+    $shapefile = file_load('1');
     $shapefile_data = spatial_import_process_shapefile($shapefile, $source_config['spatial_field_name'], 'wkt');
     foreach ($shapefile_data['columns'] as $i => $title) {
       $shapefile_data['columns'][$i] = strtolower($title); // Use lower case only.
@@ -60,12 +60,11 @@ class SpatialImportShapefileParser extends FeedsParser {
   /**
    * Override parent::getSourceElement to use only lower keys.
    */
-  /*
   public function getSourceElement($item, $element_key) {
     $element_key = strtolower($element_key);
     return isset($item[$element_key]) ? $item[$element_key] : '';
   }
-  */
+
   /**
    * Define defaults.
    */
