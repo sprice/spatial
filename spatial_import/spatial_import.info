@@ -1,4 +1,8 @@
 name = Spatial Import
 description = Import spatial data with Table Wizard or Feeds
 package = Database
-core = 6.x
+core = 7.x
+
+files[] = spatial_import.feeds.inc
+files[] = spatial_import.feeds.ShapefileParser.inc
+files[] = spatial_import.module

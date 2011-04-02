@@ -1,10 +1,7 @@
 <?php
 
 // Include Feed hooks and functionality
-require_once(drupal_get_path('module','spatial_import').'/spatial_import.feeds.inc');
-
-// Include Table Wizard hooks and functionality
-require_once(drupal_get_path('module','spatial_import').'/spatial_import.tw.inc');
+require_once(drupal_get_path('module', 'spatial_import') . '/spatial_import.feeds.inc');
 
 /**
  * Process Shapefile
@@ -12,22 +9,23 @@ require_once(drupal_get_path('module','spatial_import').'/spatial_import.tw.inc'
  * This is where the action happens. Given a path, get all the data out of a
  * zipped shapefile.
  */
-function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $field_type = 'wkt') {
-    $now = time();
-    $checkpath = realpath(file_directory_temp()).'/spatial_import/'.$now;
-    file_check_directory($checkpath,1);
-    file_copy($filepath, $checkpath, FILE_EXISTS_REPLACE);
+function spatial_import_process_shapefile($shapefile, $spatial_field = 'geom', $field_type = 'wkt') {
+    $destination = file_stream_wrapper_get_instance_by_uri('temporary://' . '/spatial_import/' . time());
+    file_prepare_directory($destination->getUri(), 1);
+    file_copy($shapefile, $destination->getUri(), FILE_EXISTS_REPLACE);
+    $dest_path = drupal_realpath($destination->getUri());
+    $source_path = drupal_realpath($shapefile->uri);
     
     $zip = new ZipArchive;
-    if (!is_readable($filepath) || ($zip->open($filepath) !== TRUE)) {
+    if (!is_readable($source_path) || ($zip->open($source_path) !== TRUE)) {
       drupal_set_message(t('zip file nonexistant or unreadable.'), 'error');
       return;
     }
     
-    $zip->extractTo($checkpath);
+    $zip->extractTo($dest_path);
     $zip->close();
     
-    $raw_shapefiles = file_scan_directory($checkpath,'\.shp$|\.dbf$|\.shx$|\.prj$');
+    $raw_shapefiles = file_scan_directory($dest_path, '\.shp$|\.dbf$|\.shx$|\.prj$');
     $shapefiles = array();
     
     foreach ($raw_shapefiles as $shp) {
@@ -39,10 +37,10 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     if (exec('which ogr2ogr')) {
       $i = 0;
       foreach ($shapefiles as $basename => $shapefile) {
-        exec('ogr2ogr -t_srs EPSG:4326 '.escapeshellarg($checkpath.'/'.'spatial_import_projected_'.$i.'.shp').' '.escapeshellarg($checkpath.'/'.$shapefile['shp']), $exec_out, $exec_non_sucess);
+        exec('ogr2ogr -t_srs EPSG:4326 ' . escapeshellarg($dest_path . '/' . 'spatial_import_projected_' . $i . '.shp') . ' ' . escapeshellarg($dest_path . '/' . $shapefile['shp']), $exec_out, $exec_non_sucess);
         $i++;
       }
-      $raw_shapefiles = file_scan_directory($checkpath,'spatial_import_projected_[0-9]\.shp$|spatial_import_projected_[0-9]\.dbf$|spatial_import_projected_[0-9]\.shx$|spatial_import_projected_[0-9]\.prj$');
+      $raw_shapefiles = file_scan_directory($dest_path, 'spatial_import_projected_[0-9]\.shp$|spatial_import_projected_[0-9]\.dbf$|spatial_import_projected_[0-9]\.shx$|spatial_import_projected_[0-9]\.prj$');
       $shapefiles = array();
       
       foreach ($raw_shapefiles as $shp) {
@@ -55,15 +53,15 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     // @@TODO: Don't use this re-zip kludge, actually process the files directly
     
     $zip = new ZipArchive;
-    $zip->open($checkpath.'/spatial_import.zip',ZIPARCHIVE::CREATE);
-    foreach($shapefiles as $shapefile) {
+    $zip->open($dest_path . '/spatial_import.zip', ZIPARCHIVE::CREATE);
+    foreach ($shapefiles as $shapefile) {
       foreach ($shapefile as $shapepart) {
-        $zip->addFile($checkpath.'/'.$shapepart);
+        $zip->addFile($dest_path . '/' . $shapepart);
       }
     }
     $zip->close();
     
-    $zip = zip_open($checkpath.'/spatial_import.zip');
+    $zip = zip_open($dest_path . '/spatial_import.zip');
     
     // Catalog the contents of the zip file.
     $files = array();
@@ -72,7 +70,7 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
       $ext = strtolower(substr(strrchr(zip_entry_name($res), '.'), 1));
       $files[$ext] = $res;
     }
-  
+
     // The zip file must minimally contain a shp, dbf and shx file.
     if (!isset($files['shp']) || !isset($files['dbf']) || !isset($files['shx'])) {
       drupal_set_message(t('This does not appear to be an archive that contains valid shp data.'), 'error');
@@ -88,7 +86,7 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     
     // Apply 'direct to database' filters.
     // These are only used by TW Import
-    $headers['field_filters'][$spatial_field] = '_spatial_import_shp_data_'.$field_type;
+    $headers['field_filters'][$spatial_field] = '_spatial_import_shp_data_' . $field_type;
     
     // Get column names
     $columns = array_keys($headers['field_lengths']);
@@ -98,7 +96,7 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     
     // Add spatial_field to schema
     if ($field_type == 'geometry') {
-      $schema['fields'][$spatial_field] = array (
+      $schema['fields'][$spatial_field] = array(
         'type' => 'geometry',
         'mysql_type' => 'geometry',
         'pgsql_type' => 'GEOMETRY',
@@ -107,7 +105,7 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
     }
     
     if ($field_type == 'wkt') {
-      $schema['fields'][$spatial_field] = array (
+      $schema['fields'][$spatial_field] = array(
         'type' => 'text',
         'size' => 'big',
       );
@@ -120,7 +118,7 @@ function spatial_import_process_shapefile($filepath, $spatial_field = 'geom', $f
       $values = array();
       $dbf_data = zip_entry_read($files['dbf'], $headers['record_size']);
       $dbf_data = substr($dbf_data, 1); // Remove "record deleted" flag.
-      foreach($headers['field_lengths'] as $name => $length) {
+      foreach ($headers['field_lengths'] as $name => $length) {
         $value = substr($dbf_data, 0, $length);
         $dbf_data = substr($dbf_data, $length);
   
@@ -167,7 +165,7 @@ function _spatial_import_file_name($file) {
   }
 }
 
-function _spatial_import_shp_geo_types($key = null) {
+function _spatial_import_shp_geo_types($key = NULL) {
   $geo_types = array(
     0 => 'none',
     1 => 'point',
@@ -196,7 +194,7 @@ function _spatial_import_dbf_headers(&$fp, &$schema) {
 
   // Set basic headers.
   $headers = unpack('H2db_id/Cy/Cm/Cd/Lcount/Sheader_size/Srecord_size', $data);
-  $date = $headers['m'] .'/'. $headers['d'] .'/'. $headers['y'] + 1900;
+  $date = $headers['m'] . '/' . $headers['d'] . '/' . $headers['y'] + 1900;
   $headers['date'] = strtotime($date);
 
   // Get the remainder of the dbf headers.
@@ -320,7 +318,7 @@ function _spatial_import_shp_get_record(&$fp) {
   
   // Look for _spatial_import_shp_get_point(), _spatial_import_shp_get_linestring(), etc.
   
-  if (!function_exists($func = '_spatial_import_shp_get_'. $row['geo_type'])) {
+  if (!function_exists($func = '_spatial_import_shp_get_' . $row['geo_type'])) {
     drupal_set_message(t('Unsupported geo type %type found in file.', array('%type' =>  $row['geo_type'])), 'error');
     return FALSE;
   }
@@ -331,11 +329,11 @@ function _spatial_import_shp_get_record(&$fp) {
 
 function _spatial_import_shp_get_point_data(&$fp) {
   $data = unpack('dx/dy', zip_entry_read($fp, 16));
-  return (float) $data['x'] .' '. (float) $data['y'];
+  return (float) $data['x'] . ' ' . (float) $data['y'];
 }
 
 function _spatial_import_shp_get_point(&$fp) {
-  return 'POINT('. _spatial_import_shp_get_point_data($fp) .')';
+  return 'POINT(' . _spatial_import_shp_get_point_data($fp) . ')';
 }
 
 function _spatial_import_shp_get_linestring(&$fp) {
@@ -351,7 +349,7 @@ function _spatial_import_shp_get_linestring(&$fp) {
 
   // Go through all of the points and collect them.
   for ($i = 1; $i <= $data['point_count']; $i++) {
-    $data['wkt'] .= _spatial_import_shp_get_point_data($fp) .',';
+    $data['wkt'] .= _spatial_import_shp_get_point_data($fp) . ',';
   }
   $data['wkt'] = substr($data['wkt'], 0, -1) . ')';
 
@@ -392,15 +390,15 @@ function _spatial_import_shp_get_polygon(&$fp) {
     // Gather the point data for each part segment.
     $wkt .= '(';
     for ($j = 1; $j <= $point_count; $j++) {
-      $wkt .= _spatial_import_shp_get_point_data($fp) .',';
+      $wkt .= _spatial_import_shp_get_point_data($fp) . ',';
     }
     $wkt = substr($wkt, 0, -1) . '),';
   }
-  $data['wkt'] = 'POLYGON('. substr($wkt, 0, -1) .')';
+  $data['wkt'] = 'POLYGON(' . substr($wkt, 0, -1) . ')';
   return $data;
 }
 
-function _spatial_import_shp_data_fetch($type, &$fp, $offset = null) {
+function _spatial_import_shp_data_fetch($type, &$fp, $offset = NULL) {
   if (in_array($type, array('i', 'N'))) {
     $length = 4;
   }
